@@ -151,7 +151,7 @@ function opponent_info() {
             var types = ""
             var arrayLength = opponent_info["type"].length;
             for (var o = 0; o < arrayLength; o++) {
-                types += get_type_image(opponent_info["type"][o]) + String((opponent_info["type"][o] != 0 && arrayLength != 1)? '':' ');
+                types += get_type_image(opponent_info["type"][o]) + String(((opponent_info["type"][o] != 0 && arrayLength != 1)? " ":""));
             }
             $("#opponent_type").html(types);
             

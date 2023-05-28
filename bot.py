@@ -29,6 +29,7 @@ from ruamel.yaml import YAML                     # https://pypi.org/project/ruam
 import fastjsonschema                            # https://pypi.org/project/fastjsonschema/
 # Helper functions
 import calculateHiddenPower
+import load_images
 
 def read_file(file: str): # Simple function to read data from a file, return False if file doesn't exist
     try:
@@ -86,18 +87,20 @@ def emu_combo(sequence: list): # Function to send a sequence of inputs and delay
     except: debug_log.exception('')
 
 def press_button(button: str): # Function to update the press_input object
-    global press_input
+    global current_input
     debug_log.debug(f"Pressing: {button}...")
-    press_input[button] = True
-    time.sleep(0.01/emu_speed) # Wait ~1 frame
+    input_list[current_input] = button
+    input_list.seek(0)
+    press_input_mmap.write(bytes(json.dumps(press_input), encoding="utf-8"))
     press_input[button] = False
-    time.sleep(0.01/emu_speed) # Wait ~1 frame
+
 
 def hold_button(button: str): # Function to update the hold_input object
     global hold_input
     debug_log.debug(f"Holding: {button}...")
     hold_input[button] = True
-
+    hold_input_mmap.seek(0)
+    hold_input_mmap.write(bytes(json.dumps(hold_input), encoding="utf-8"))
 def release_button(button: str): # Function to update the hold_input object
     global hold_input
     debug_log.debug(f"Releasing: {button}...")
@@ -125,6 +128,29 @@ def opponent_changed(): # This function checks if there is a different opponent 
         if args.di:
             debug_log.exception('')
         return False
+    
+def get_screenshot():
+    g_bizhawk_screenshot = None
+    hold_button("Screenshot")
+    time.sleep(max((1/max(emu_speed,1))*0.016,0.002)) # Give emulator time to produce a screenshot
+    try:
+        shmem = mmap.mmap(0, mmap_screenshot_size, mmap_screenshot_file)
+        screenshot = Image.open(io.BytesIO(shmem))
+        g_bizhawk_screenshot = cv2.cvtColor(numpy.array(screenshot), cv2.COLOR_BGR2RGB) # Convert screenshot to numpy array COLOR_BGR2RGB
+        screenshot.close()
+    except:
+        if screenshot is not None:
+            screenshot.close()
+        if args.dm:
+            debug_log.exception('')
+        release_button("Screenshot")
+        return None
+    release_button("Screenshot")
+    if args.di:
+        cv2.imshow("get_screenshot",g_bizhawk_screenshot)
+        cv2.waitKey(1)
+    return g_bizhawk_screenshot
+
 def mem_pollScreenshot():
     global g_bizhawk_screenshot
     while True:
@@ -150,9 +176,10 @@ def mem_pollScreenshot():
 def find_image(file: str): # Function to find an image in a BizHawk screenshot
     try:
         profile_start = time.time() # Performance profiling
+        #g_bizhawk_screenshot = get_screenshot()
         threshold = 0.999
         if args.di: debug_log.debug(f"Searching for image {file} (threshold: {threshold})")
-        template = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+        template = load_images.image_dict[file]
         hh, ww = template.shape[:2]
     
         correlation = cv2.matchTemplate(g_bizhawk_screenshot, template[:,:,0:3], cv2.TM_CCORR_NORMED) # Do masked template matching and save correlation image
@@ -332,7 +359,11 @@ def flee_battle(): # Function to run from wild pokemon
     try:
         debug_log.info("Running from battle...")
         while trainer_info["state"] != 80: # State 80 = overworld
-            while not find_image("data/templates/battle/run.png") and trainer_info["state"] != 80: emu_combo(["Right","Down", "B"]) # Press right + down until RUN is selected
+            while not find_image("data/templates/battle/run.png") and trainer_info["state"] != 80:
+                press_button("Right")
+                press_button("Down")
+                press_button("B") 
+                # Press right + down until RUN is selected
             while find_image("data/templates/battle/run.png") and trainer_info["state"] != 80: press_button("A")
             press_button("B")
         time.sleep(0.8/emu_speed) # Wait for battle fade animation
@@ -808,23 +839,26 @@ def mem_getOpponentInfo(): # Loop repeatedly to read opponent info from memory
         except:
             if args.d: debug_log.exception('')
             continue
-        
+def mem_can_write_inputs():
+    pass
 def mem_sendInputs():
     while True:
         try:
-            press_input_mmap.seek(0)
-            press_input_mmap.write(bytes(json.dumps(press_input), encoding="utf-8"))
-            hold_input_mmap.seek(0)
-            hold_input_mmap.write(bytes(json.dumps(hold_input), encoding="utf-8"))
+            pass
+            #press_input_mmap.seek(0)
+            #press_input_mmap.write(bytes(json.dumps(press_input), encoding="utf-8"))
+            #hold_input_mmap.seek(0)
+            #hold_input_mmap.write(bytes(json.dumps(hold_input), encoding="utf-8"))
+            #release_all_inputs()
         except:
             if args.d: debug_log.exception('')
             continue
-        time.sleep(0.001) #The less sleep the better but without sleep it will hit CPU hard
+        time.sleep(0.08) #The less sleep the better but without sleep it will hit CPU hard
 
 def httpServer(): # Run HTTP server to make data available via HTTP GET
     try:
         log = logging.getLogger('werkzeug')
-        if not args.d: log.setLevel(logging.ERROR)
+        #if not args.d: log.setLevel(logging.ERROR)
 
         server = Flask(__name__)
         CORS(server)
@@ -884,7 +918,6 @@ def mainLoop(): # 🔁 Main loop
     try:
         global last_opponent_personality
         if "save_game_on_start" in config["game_save"]: save_game()
-        release_all_inputs()
 
         while True:
             if trainer_info and emu_info:
@@ -934,10 +967,17 @@ def mainLoop(): # 🔁 Main loop
                     debug_log.info(f"Fishing...")
                     emu_combo(["Select", "800ms"]) # Cast rod and wait for fishing animation
                     started_fishing = time.time()
+                    on_the_hook = False
                     while not opponent_changed(): # State 80 = overworld
-                        if find_image("data/templates/oh_a_bite.png") or find_image("data/templates/on_the_hook.png"): emu_combo(["100ms", "A", "100ms"])
-                        if find_image("data/templates/not_even_a_nibble.png") or find_image("data/templates/it_got_away.png"): emu_combo(["B", "100ms", "Select"])
-                        if not find_image("data/templates/text_period.png"): emu_combo(["Select", "800ms"]) # Re-cast rod if the fishing text prompt is not visible
+                        while on_the_hook == False:
+                            if find_image("data/templates/oh_a_bite.png") or find_image("data/templates/on_the_hook.png"):
+                                press_button("A")
+                                if find_image("data/templates/on_the_hook.png"):
+                                    on_the_hook = True
+                                while find_image("data/templates/oh_a_bite.png"):
+                                    pass
+                            elif find_image("data/templates/not_even_a_nibble.png") or find_image("data/templates/it_got_away.png"): press_button("B")
+                            #elif not find_image("data/templates/text_period.png"): emu_combo(["Select", "800ms"]) # Re-cast rod if the fishing text prompt is not visible
                     identify_pokemon()
 
                 # ➕ Starters soft reset method
@@ -1107,9 +1147,12 @@ try:
     else: shiny_log = {"shiny_log": []}
 
     default_input = {"A": False, "B": False, "L": False, "R": False, "Up": False, "Down": False, "Left": False, "Right": False, "Select": False, "Start": False, "Light Sensor": 0, "Power": False, "Tilt X": 0, "Tilt Y": 0, "Tilt Z": 0, "Screenshot": False}
-    press_input_mmap = mmap.mmap(-1, 256, tagname="bizhawk_press_input", access=mmap.ACCESS_WRITE)
-    press_input = default_input
-    hold_input_mmap = mmap.mmap(-1, 256, tagname="bizhawk_hold_input", access=mmap.ACCESS_WRITE)
+    input_list = mmap.mmap(-1, 4096, tagname="bizhawk_input_list", access=mmap.ACCESS_WRITE)
+    input_list_index = mmap.mmap(-1, 4096, tagname="bizhawk_input_list_index", access=mmap.ACCESS_WRITE)
+
+    #press_input_mmap = mmap.mmap(-1, 4096, tagname="bizhawk_press_input", access=mmap.ACCESS_WRITE)
+    #press_input = default_input
+    hold_input_mmap = mmap.mmap(-1, 4096, tagname="bizhawk_hold_input", access=mmap.ACCESS_WRITE)
     hold_input = default_input
 
     last_trainer_state, last_opponent_personality, trainer_info, opponent_info, emu_info, party_info, emu_speed = None, None, None, None, None, None, 1

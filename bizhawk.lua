@@ -21,8 +21,43 @@ package.path = ";.\\data\\lua\\?.lua;"
 
 json = require "json"
 PokemonNames = require "PokemonNames"
+-- Release all keys after starting script
+if enable_input then
+	input = joypad.get()
+	input["A"], input["B"], input["L"], input["R"], input["Up"], input["Down"], input["Left"], input["Right"], input["Select"], input["Start"], input["Screenshot"] = false, false, false, false, false, false, false, false, false, false, false
+	joypad.set(input)
+end
 
 console.log("Detected game: " .. GameSettings.gamename)
+-- Allocate memory mapped file sizes
+comm.mmfWrite("bizhawk_screenshot", string.rep("\x00", 24576))
+comm.mmfSetFilename("bizhawk_screenshot")
+comm.mmfScreenshot()
+
+comm.mmfWrite("bizhawk_press_input", string.rep("\x00", 4096))
+comm.mmfWrite("bizhawk_hold_input", string.rep("\x00", 4096))
+comm.mmfWrite("bizhawk_trainer_info", string.rep("\x00", 4096))
+comm.mmfWrite("bizhawk_party_info", string.rep("\x00", 8192))
+comm.mmfWrite("bizhawk_opponent_info", string.rep("\x00", 4096))
+comm.mmfWrite("bizhawk_emu_info", string.rep("\x00", 4096))
+
+input_list = {}
+for i = 1, 250 do
+	input_list[i] = string.char(0)
+end
+
+
+-- Create memory mapped input files for Python script to write to
+comm.mmfWrite("bizhawk_hold_input", json.encode(input) .. "\x00")
+comm.mmfWrite("bizhawk_input_list", json.encode(input_list) .. "\x00")
+comm.mmfWrite("bizhawk_input_list_index", string.rep("\x00", 4096))
+
+
+last_posY = 0
+last_posX = 0
+last_state = 0
+last_mapBank = 0
+last_mapId = 0
 
 -- Function to read Pokemon data from an address
 -- Pokemon data structure: https://bulbapedia.bulbagarden.net/wiki/Pok%C3%A9mon_data_structure_(Generation_III)
@@ -232,68 +267,56 @@ function mainLoop()
 		end
 	end
 end
-
--- Release all keys after starting script
-if enable_input then
-	input = joypad.get()
-	input["A"], input["B"], input["L"], input["R"], input["Up"], input["Down"], input["Left"], input["Right"], input["Select"], input["Start"], input["Screenshot"] = false, false, false, false, false, false, false, false, false, false, false
-	joypad.set(input)
-end
-
--- Allocate memory mapped file sizes
-comm.mmfWrite("bizhawk_screenshot", string.rep("\x00", 24576))
-comm.mmfSetFilename("bizhawk_screenshot")
-comm.mmfScreenshot()
-
-comm.mmfWrite("bizhawk_press_input", string.rep("\x00", 256))
-comm.mmfWrite("bizhawk_hold_input", string.rep("\x00", 256))
-comm.mmfWrite("bizhawk_trainer_info", string.rep("\x00", 4096))
-comm.mmfWrite("bizhawk_party_info", string.rep("\x00", 8192))
-comm.mmfWrite("bizhawk_opponent_info", string.rep("\x00", 4096))
-comm.mmfWrite("bizhawk_emu_info", string.rep("\x00", 4096))
-
--- Create memory mapped input files for Python script to write to
-comm.mmfWrite("bizhawk_press_input", json.encode(input) .. "\x00")
-comm.mmfWrite("bizhawk_hold_input", json.encode(input) .. "\x00")
-
-last_posY = 0
-last_posX = 0
-last_state = 0
-last_mapBank = 0
-last_mapId = 0
-
-while true do
+function handleInput()
 	if enable_input then
 		for button, _ in pairs (input) do
 			input[button] = false
 		end
 
-		local press_success, press_result = pcall(json.decode, comm.mmfRead("bizhawk_press_input", 256))
-		if press_success then
-			input_press = press_result
-		end
-		local hold_success, hold_result = pcall(json.decode, comm.mmfRead("bizhawk_hold_input", 256))
-		if hold_success then
-			input_hold = hold_result
+		--local pcall_result, press_result = pcall(json.decode, comm.mmfRead("bizhawk_press_input", 4096))
+		--if pcall_result then
+		--	pressed_buttons = press_result
+		--end
+		local pcall_result, hold_result = pcall(json.decode, comm.mmfRead("bizhawk_hold_input", 4096))
+		if pcall_result then
+			held_buttons = hold_result
 		end
 
-		if input_press then
-			for button, press in pairs (input_press) do
-				if press and (press ~= 0) then
-					input[button] = true
-				elseif input_hold[button] then
-					input[button] = true
+		for button, button_is_pressed in pairs (pressed_buttons) do
+			if button_is_pressed then
+				--if frames_left[button] > 0: --If a new press comes in while another press is currently happening, skip 
+				--	skipInput[button] = true
+				frames_left[button] = 3 --Every press gets 3 frames
+				input[button] = false
+
+				if (button == 'Screenshot') or (button == 'Tilt X') or (button == 'Light Sensor') or (button == 'Tilt Y') or (button == 'Tilt Z') then
+					;--No need to show these on screen
 				else
-					input[button] = false
+					gui.addmessage("button: " .. button)
 				end
+
+			elseif input_hold[button] then
+				input[button] = true
+			else
+				input[button] = false
 			end
 		end
 
+		if (last_state ~= trainer.state) then
+			last_state = trainer.state
+			gui.addmessage("State: " .. trainer.state)
+		end
 		joypad.set(input)
+		
+
 	end
-	if input["Screenshot"] then
-		comm.mmfScreenshot()
-	end
+
+end
+
+while true do
+	handleInput()
+	comm.mmfWrite("bizhawk_inputs_writeable", "Y")
+	comm.mmfScreenshot()
 	emu_info = getEmu()
 	comm.mmfWrite("bizhawk_emu_info", json.encode({["emu"] = emu_info}) .. "\x00")
 	-- Save screenshot and other data to memory mapped files, as FPS is higher, reduce the number of reads and writes to memory
