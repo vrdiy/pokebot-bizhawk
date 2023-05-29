@@ -2,6 +2,7 @@
 import io                                        # https://docs.python.org/3/library/io.html
 import os                                        # https://docs.python.org/3/library/os.html
 import re                                        # https://docs.python.org/3/library/re.html
+import array                                     # https://docs.python.org/3/library/array.html
 import sys                                       # https://docs.python.org/3/library/sys.html
 import glob                                      # https://docs.python.org/3/library/glob.html
 import json                                      # https://docs.python.org/3/library/json.html
@@ -83,15 +84,43 @@ def emu_combo(sequence: list): # Function to send a sequence of inputs and delay
             if re.match(sleep_pattern, k):
                 delay = float(re.sub(r"ms$", "", k))
                 time.sleep((delay/1000)/emu_speed)
-            else: press_button(k)
+            else:
+                pass 
+                press_button(k)
     except: debug_log.exception('')
 
 def press_button(button: str): # Function to update the press_input object
+        global g_list_copy, g_current_index
+        match button:
+            case 'Left':
+                button = 'l'
+            case 'Right':
+                button = 'r'
+            case 'Up':
+                button = 'u'
+            case 'Down':
+                button = 'd'
+        time.sleep(0.010)
+        debug_log.debug(f"Pressing: {button}...")
+        print(f"{button}, {g_current_index}")
+        index = g_current_index["index"]
+        g_list_copy[f"{index}"] = button
+        arr_input_list[g_current_index]
+        input_list_mmap.seek(0)
+        input_list_mmap.write(bytes(json.dumps(g_list_copy, sort_keys=True), encoding="utf-8"))
+        input_list_index_mmap.seek(0)
+        input_list_index_mmap.write(arr_input_list.tobytes()) #The two spaces are important, they overwrite larger numbers
+        g_current_index["index"] +=1
+        if g_current_index["index"] > 99:
+            g_current_index["index"] = 0
+
+
+def old_press_button(button: str): # Function to update the press_input object
     global current_input
     debug_log.debug(f"Pressing: {button}...")
     input_list[current_input] = button
     input_list.seek(0)
-    press_input_mmap.write(bytes(json.dumps(press_input), encoding="utf-8"))
+    input_list_mmap.write(bytes(json.dumps(input_list), encoding="utf-8"))
     press_input[button] = False
 
 
@@ -432,7 +461,7 @@ def follow_path(coords: list):
                     debug_log.info(f"Running to map: {map_data[0][0]}:{map_data[0][1]}")
                     while (trainer_info["mapBank"] != map_data[0][0] or trainer_info["mapId"] != map_data[0][1]):
                         if stuck > 25:
-                            press_button("B")
+                            #press_button("B")
                             stuck = 0
                         
                         if trainer_info[axis] == last_axis: stuck += 1
@@ -655,7 +684,7 @@ def identify_pokemon(starter: bool = False): # Identify opponent pokemon and inc
             while trainer_info["state"] not in [3, 255] and i < 250:
                 press_button("B")
                 i += 1
-        if trainer_info["state"] == 80: return False
+        #if trainer_info["state"] == 80: return False
 
         if starter: pokemon = party_info[0]
         else: pokemon = opponent_info
@@ -729,7 +758,9 @@ def identify_pokemon(starter: bool = False): # Identify opponent pokemon and inc
                 #elif pokemon["name"] == "Ralts" and pokemon["attackIV"] > 25 and pokemon["spAttackIV"] > 25 and pokemon["nature"] == "Lonely": catch_pokemon()
 
                 elif "wild_pokemon" in config["battle"]: battle()
-                else: flee_battle()
+                else:
+                    print("fleeing")
+                    flee_battle()
     
             return False
     except:
@@ -858,7 +889,7 @@ def mem_sendInputs():
 def httpServer(): # Run HTTP server to make data available via HTTP GET
     try:
         log = logging.getLogger('werkzeug')
-        #if not args.d: log.setLevel(logging.ERROR)
+        if not args.d: log.setLevel(logging.ERROR)
 
         server = Flask(__name__)
         CORS(server)
@@ -965,18 +996,22 @@ def mainLoop(): # 🔁 Main loop
                 # 🐠 Fishing method
                 if config["bot_mode"] == "Fishing":
                     debug_log.info(f"Fishing...")
-                    emu_combo(["Select", "800ms"]) # Cast rod and wait for fishing animation
+                    #emu_combo(["Select", "800ms"]) # Cast rod and wait for fishing animation
                     started_fishing = time.time()
                     on_the_hook = False
                     while not opponent_changed(): # State 80 = overworld
+                        print("fishing")
                         while on_the_hook == False:
+                            time.sleep(0.010)
                             if find_image("data/templates/oh_a_bite.png") or find_image("data/templates/on_the_hook.png"):
                                 press_button("A")
                                 if find_image("data/templates/on_the_hook.png"):
                                     on_the_hook = True
                                 while find_image("data/templates/oh_a_bite.png"):
                                     pass
-                            elif find_image("data/templates/not_even_a_nibble.png") or find_image("data/templates/it_got_away.png"): press_button("B")
+                            elif find_image("data/templates/not_even_a_nibble.png") or find_image("data/templates/it_got_away.png"):
+                                #press_button("B")
+                                pass
                             #elif not find_image("data/templates/text_period.png"): emu_combo(["Select", "800ms"]) # Re-cast rod if the fishing text prompt is not visible
                     identify_pokemon()
 
@@ -1147,9 +1182,53 @@ try:
     else: shiny_log = {"shiny_log": []}
 
     default_input = {"A": False, "B": False, "L": False, "R": False, "Up": False, "Down": False, "Left": False, "Right": False, "Select": False, "Start": False, "Light Sensor": 0, "Power": False, "Tilt X": 0, "Tilt Y": 0, "Tilt Z": 0, "Screenshot": False}
-    input_list = mmap.mmap(-1, 4096, tagname="bizhawk_input_list", access=mmap.ACCESS_WRITE)
-    input_list_index = mmap.mmap(-1, 4096, tagname="bizhawk_input_list_index", access=mmap.ACCESS_WRITE)
+    input_list_mmap = mmap.mmap(-1, 16384, tagname="bizhawk_input_list", access=mmap.ACCESS_WRITE)
+    arr_input_list = array.array('B',[0]*100) # Create empty byte arr
+    input_list_index_mmap = mmap.mmap(-1, 4096, tagname="bizhawk_input_list_index", access=mmap.ACCESS_WRITE)
+    input_list_mmap.seek(0)
+    input_list_data = input_list_mmap.read(16384)
+    input_list_data = str(input_list_data)
+    sliced_list = input_list_data.split('\\x00') #Cut extra characters
+    sliced_list = sliced_list[0]
+    sliced_list = sliced_list[2:]
+    
+    print(sliced_list)
+    sliced_list = json.loads(sliced_list)
+    
+    g_current_index = {}
+    g_current_index["index"] = 0
+    g_list_copy = {}
+    g_list_copy = {key:val for key,val in sorted(sliced_list.items(),key=lambda item: int(item[0]))}
+    input_list_index_mmap.seek(0)
+    input_list_index_mmap.write(bytes(json.dumps(g_current_index), encoding="utf-8")) #The two spaces are important, they overwrite larger numbers
+    #print(g_list_copy)
 
+    input_list_index_mmap.seek(0)
+    input_list_index = input_list_index_mmap.read(4096)
+    sliced_list_index = str(input_list_index).split('\\x00') #Cut extra characters
+    sliced_list_index = sliced_list_index[0]
+    sliced_list_index = str(sliced_list_index).split('}')
+    sliced_list_index = sliced_list_index[0]
+
+    sliced_list_index = sliced_list_index[2:]
+    sliced_list_index += '}'
+    print(sliced_list_index)
+    sliced_list_index = json.loads(sliced_list_index)
+
+    print(sliced_list_index["index"])
+    #print(int(sliced_list_index))
+    #print(g_list_copy)
+    #while current_index != 100:
+      #  for index in sliced_list:
+            #debug_log.debug(f"Pressing: {button}...")
+       #     g_list_copy[f"{current_index}"] = "A"
+       #     input_list_mmap.seek(0)
+      #  current_index += 1
+        #print(len(json.dumps(list_copy)))
+       # input_list_mmap.write(bytes(json.dumps(g_list_copy, sort_keys=True), encoding="utf-8"))
+    #for i in range(100):
+       # press_button("B")
+        
     #press_input_mmap = mmap.mmap(-1, 4096, tagname="bizhawk_press_input", access=mmap.ACCESS_WRITE)
     #press_input = default_input
     hold_input_mmap = mmap.mmap(-1, 4096, tagname="bizhawk_hold_input", access=mmap.ACCESS_WRITE)

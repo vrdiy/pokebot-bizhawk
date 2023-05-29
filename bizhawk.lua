@@ -43,14 +43,17 @@ comm.mmfWrite("bizhawk_emu_info", string.rep("\x00", 4096))
 
 input_list = {}
 for i = 1, 250 do
-	input_list[i] = string.char(0)
+	input_list[tostring(i)] = "J" --There's d
 end
-
-
+g_current_index = {}
+g_current_index["index"] = 1
 -- Create memory mapped input files for Python script to write to
 comm.mmfWrite("bizhawk_hold_input", json.encode(input) .. "\x00")
-comm.mmfWrite("bizhawk_input_list", json.encode(input_list) .. "\x00")
+comm.mmfWrite("bizhawk_input_list", string.rep("\x00", 4096))
+
+comm.mmfWriteBytes("bizhawk_input_list", "\x00" * 100)
 comm.mmfWrite("bizhawk_input_list_index", string.rep("\x00", 4096))
+comm.mmfWrite("bizhawk_input_list_index", json.encode(g_current_index) .. "\x00")
 
 
 last_posY = 0
@@ -266,39 +269,88 @@ function mainLoop()
 			opponent_info_file:close()
 		end
 	end
-end
-function handleInput()
-	if enable_input then
-		for button, _ in pairs (input) do
-			input[button] = false
-		end
+	comm.mmfScreenshot()
 
-		--local pcall_result, press_result = pcall(json.decode, comm.mmfRead("bizhawk_press_input", 4096))
-		--if pcall_result then
-		--	pressed_buttons = press_result
+end
+function testLag()
+	local pcall_result, list_of_inputs = pcall(json.decode, comm.mmfRead("bizhawk_input_list", 4096))
+	if pcall_result == false then
+		gui.addmessage("pcall fail list")
+		return false	
+	end
+	local pcall_result, py_current_index = pcall(json.decode, comm.mmfRead("bizhawk_input_list_index", 4096))
+	if pcall_result == false then
+		gui.addmessage("pcall fail list index")
+		return false
+	end
+end
+function traverseNewInputs()
+	--gui.addmessage("traverseInputs")
+
+	local pcall_result, list_of_inputs = pcall(json.decode, comm.mmfRead("bizhawk_input_list", 4096))
+	if pcall_result == false then
+		gui.addmessage("pcall fail list")
+		return false	
+	end
+	local pcall_result, py_current_index = pcall(json.decode, comm.mmfRead("bizhawk_input_list_index", 4096))
+	if pcall_result == false then
+		gui.addmessage("pcall fail list index")
+		return false
+	end
+	--console.log(list_of_inputs)
+	--console.log(py_current_index["index"])
+	--gui.addmessage(py_current_index)
+	--gui.addmessage(g_current_index["index"])
+	current_index = tostring(g_current_index["index"])
+	--gui.addmessage(tostring(current_index))
+	--gui.addmessage(list_of_inputs[tostring(current_index)])
+	while current_index ~= tostring(py_current_index["index"]) do
+		button = list_of_inputs[tostring(current_index)]
+		input[button] = true
+		if button == "A" then
+			input["B"] = false --If there are any new "A" presses after "B" in the list, discard the "B" presses
+		end
+		current_index = tostring(tonumber(current_index) + 1)
+		if tonumber(current_index) > 250 then
+			current_index = "1"
+		end
+		if (button == 'Screenshot') or (button == 'Tilt X') or (button == 'Light Sensor') or (button == 'Tilt Y') or (button == 'Tilt Z') then
+			;--No need to show these on screen
+		else
+			--gui.addmessage("Index: " .. current_index)
+			--gui.addmessage("Button: ".. button) 
+		end
+	end
+	g_current_index["index"] = current_index
+	joypad.set(input)
+	--gui.addmessage("py:")
+	--gui.addmessage(py_current_index["index"])
+	--gui.addmessage("lua:")
+	--gui.addmessage(g_current_index["index"])
+end
+
+function handleHeldButtons()
+	if enable_input then
+		--for button, _ in pairs (input) do
+		--	input[button] = false
 		--end
+
 		local pcall_result, hold_result = pcall(json.decode, comm.mmfRead("bizhawk_hold_input", 4096))
 		if pcall_result then
 			held_buttons = hold_result
 		end
 
-		for button, button_is_pressed in pairs (pressed_buttons) do
-			if button_is_pressed then
-				--if frames_left[button] > 0: --If a new press comes in while another press is currently happening, skip 
-				--	skipInput[button] = true
-				frames_left[button] = 3 --Every press gets 3 frames
-				input[button] = false
-
+		for button, button_is_held in pairs (held_buttons) do
+			if button_is_held then
 				if (button == 'Screenshot') or (button == 'Tilt X') or (button == 'Light Sensor') or (button == 'Tilt Y') or (button == 'Tilt Z') then
 					;--No need to show these on screen
 				else
-					gui.addmessage("button: " .. button)
+					gui.addmessage("Index: " .. button)
+					gui.addmessage("Button: " .. button_is_pressed)
 				end
-
-			elseif input_hold[button] then
-				input[button] = true
+				--input[button] = true
 			else
-				input[button] = false
+				--input[button] = false
 			end
 		end
 
@@ -312,16 +364,24 @@ function handleInput()
 	end
 
 end
-
+every_other_frame_traverse_counter = 0
+mainLoop()
 while true do
-	handleInput()
-	comm.mmfWrite("bizhawk_inputs_writeable", "Y")
-	comm.mmfScreenshot()
+	if every_other_frame_traverse_counter % 2 == 0 then --Every other frame will skip the presses, so you can spam inputs in Python and them not get held
+		--traverseNewInputs()
+		testLag()
+	else
+		for button, buttons in pairs (input) do
+			input[button] = false --Set every button to false for 1 frame. Held Buttons get processed after and won't be skipped
+			joypad.set(input)
+		end
+	end
+	--handleHeldButtons()
 	emu_info = getEmu()
 	comm.mmfWrite("bizhawk_emu_info", json.encode({["emu"] = emu_info}) .. "\x00")
 	-- Save screenshot and other data to memory mapped files, as FPS is higher, reduce the number of reads and writes to memory
 	fps = emu_info.emuFPS
-	if fps > 70 and fps <= 120  then -- Copy screenshot to memory every nth frame if running at higher than 1x to reduce memory writes
+	if fps > 0 and fps <= 120  then -- Copy screenshot to memory every nth frame if running at higher than 1x to reduce memory writes
 		if (emu_info.frameCount % 2 == 0) then
 			mainLoop()
 		end
@@ -338,9 +398,10 @@ while true do
 			mainLoop()
 		end
 	else
-		mainLoop()
+		--mainLoop()
 	end
 
 	-- Frame advance
 	emu.frameadvance()
+	every_other_frame_traverse_counter = every_other_frame_traverse_counter + 1
 end
