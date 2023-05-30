@@ -42,18 +42,15 @@ comm.mmfWrite("bizhawk_opponent_info", string.rep("\x00", 4096))
 comm.mmfWrite("bizhawk_emu_info", string.rep("\x00", 4096))
 
 input_list = {}
-for i = 1, 250 do
-	input_list[tostring(i)] = "J" --There's d
+for i = 0, 100 do --101 entries, the final entry is for the index.
+	input_list[i] = string.byte('k')
 end
-g_current_index = {}
-g_current_index["index"] = 1
+g_current_index = 1 --Keep track of where Lua is in it's traversal of the input list
 -- Create memory mapped input files for Python script to write to
 comm.mmfWrite("bizhawk_hold_input", json.encode(input) .. "\x00")
 comm.mmfWrite("bizhawk_input_list", string.rep("\x00", 4096))
 
-comm.mmfWriteBytes("bizhawk_input_list", "\x00" * 100)
-comm.mmfWrite("bizhawk_input_list_index", string.rep("\x00", 4096))
-comm.mmfWrite("bizhawk_input_list_index", json.encode(g_current_index) .. "\x00")
+comm.mmfWriteBytes("bizhawk_input_list", input_list)
 
 
 last_posY = 0
@@ -273,7 +270,7 @@ function mainLoop()
 
 end
 function testLag()
-	local pcall_result, list_of_inputs = pcall(json.decode, comm.mmfRead("bizhawk_input_list", 4096))
+	local pcall_result, list_of_inputs = pcall(comm.mmfRead,"bizhawk_input_list", 4096)
 	if pcall_result == false then
 		gui.addmessage("pcall fail list")
 		return false	
@@ -283,36 +280,44 @@ function testLag()
 		gui.addmessage("pcall fail list index")
 		return false
 	end
+	bytes_list_of_inputs= list_of_inputs:byte(102)
+	console.log(bytes_list_of_inputs)
 end
+
 function traverseNewInputs()
 	--gui.addmessage("traverseInputs")
 
-	local pcall_result, list_of_inputs = pcall(json.decode, comm.mmfRead("bizhawk_input_list", 4096))
+	local pcall_result, list_of_inputs = pcall(comm.mmfRead,"bizhawk_input_list", 4096)
 	if pcall_result == false then
 		gui.addmessage("pcall fail list")
 		return false	
 	end
-	local pcall_result, py_current_index = pcall(json.decode, comm.mmfRead("bizhawk_input_list_index", 4096))
-	if pcall_result == false then
-		gui.addmessage("pcall fail list index")
-		return false
-	end
-	--console.log(list_of_inputs)
-	--console.log(py_current_index["index"])
-	--gui.addmessage(py_current_index)
-	--gui.addmessage(g_current_index["index"])
-	current_index = tostring(g_current_index["index"])
-	--gui.addmessage(tostring(current_index))
-	--gui.addmessage(list_of_inputs[tostring(current_index)])
-	while current_index ~= tostring(py_current_index["index"]) do
-		button = list_of_inputs[tostring(current_index)]
+	current_index = g_current_index
+	python_current_index = list_of_inputs:byte(102)
+	gui.addmessage(python_current_index)
+	gui.addmessage(current_index)
+
+	while current_index ~= python_current_index do
+		button = utf8.char(list_of_inputs:byte(current_index))
+		if button == 'l' then
+			button = "Left"
+		end
+		if button == 'r' then
+			button = "Right"
+		end
+		if button == 'u' then
+			button = "Up"
+		end
+		if button == 'd' then	
+			button = "Down"
+		end
 		input[button] = true
 		if button == "A" then
 			input["B"] = false --If there are any new "A" presses after "B" in the list, discard the "B" presses
 		end
-		current_index = tostring(tonumber(current_index) + 1)
-		if tonumber(current_index) > 250 then
-			current_index = "1"
+		current_index = current_index + 1
+		if current_index > 101 then
+			current_index = 1
 		end
 		if (button == 'Screenshot') or (button == 'Tilt X') or (button == 'Light Sensor') or (button == 'Tilt Y') or (button == 'Tilt Z') then
 			;--No need to show these on screen
@@ -321,12 +326,8 @@ function traverseNewInputs()
 			--gui.addmessage("Button: ".. button) 
 		end
 	end
-	g_current_index["index"] = current_index
+	g_current_index = current_index
 	joypad.set(input)
-	--gui.addmessage("py:")
-	--gui.addmessage(py_current_index["index"])
-	--gui.addmessage("lua:")
-	--gui.addmessage(g_current_index["index"])
 end
 
 function handleHeldButtons()

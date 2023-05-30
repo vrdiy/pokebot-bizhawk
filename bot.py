@@ -90,7 +90,7 @@ def emu_combo(sequence: list): # Function to send a sequence of inputs and delay
     except: debug_log.exception('')
 
 def press_button(button: str): # Function to update the press_input object
-        global g_list_copy, g_current_index
+        global bytes_input_list_data, g_current_index
         match button:
             case 'Left':
                 button = 'l'
@@ -100,19 +100,33 @@ def press_button(button: str): # Function to update the press_input object
                 button = 'u'
             case 'Down':
                 button = 'd'
-        time.sleep(0.010)
+            
+        byte_a = bytes('a',"utf-8")
+        #bytes_input_list_data[50] = byte_a[0]
+        #bytes_input_list_data[49] = 100
+        #bytes_input_list_data[48] = 50
+        #bytes_input_list_data[99] = 99
+        print("bytes arr in pressbuton:")
+
+        print(bytes_input_list_data)
+
         debug_log.debug(f"Pressing: {button}...")
         print(f"{button}, {g_current_index}")
-        index = g_current_index["index"]
-        g_list_copy[f"{index}"] = button
-        arr_input_list[g_current_index]
+        index = g_current_index
+        print(f"index:{index}")
+        print(bytes(button,"utf-8"))
+        bytes_input_list_data[80] = bytes(button,"utf-8")[0]
+        input_list_mmap.seek(index)
+        input_list_mmap.write(bytes(button,"utf-8"))
+        input_list_mmap.seek(101)
+        input_list_mmap.write(bytes([index]))
         input_list_mmap.seek(0)
-        input_list_mmap.write(bytes(json.dumps(g_list_copy, sort_keys=True), encoding="utf-8"))
-        input_list_index_mmap.seek(0)
-        input_list_index_mmap.write(arr_input_list.tobytes()) #The two spaces are important, they overwrite larger numbers
-        g_current_index["index"] +=1
-        if g_current_index["index"] > 99:
-            g_current_index["index"] = 0
+        first101Bytes = input_list_mmap.read(102)
+        print("first101")
+        print(first101Bytes)
+        g_current_index +=1
+        if g_current_index > 99:
+            g_current_index = 0
 
 
 def old_press_button(button: str): # Function to update the press_input object
@@ -1182,40 +1196,41 @@ try:
     else: shiny_log = {"shiny_log": []}
 
     default_input = {"A": False, "B": False, "L": False, "R": False, "Up": False, "Down": False, "Left": False, "Right": False, "Select": False, "Start": False, "Light Sensor": 0, "Power": False, "Tilt X": 0, "Tilt Y": 0, "Tilt Z": 0, "Screenshot": False}
-    input_list_mmap = mmap.mmap(-1, 16384, tagname="bizhawk_input_list", access=mmap.ACCESS_WRITE)
+    input_list_mmap = mmap.mmap(-1, 4096, tagname="bizhawk_input_list", access=mmap.ACCESS_WRITE)
     arr_input_list = array.array('B',[0]*100) # Create empty byte arr
-    input_list_index_mmap = mmap.mmap(-1, 4096, tagname="bizhawk_input_list_index", access=mmap.ACCESS_WRITE)
     input_list_mmap.seek(0)
-    input_list_data = input_list_mmap.read(16384)
-    input_list_data = str(input_list_data)
-    sliced_list = input_list_data.split('\\x00') #Cut extra characters
-    sliced_list = sliced_list[0]
-    sliced_list = sliced_list[2:]
-    
-    print(sliced_list)
-    sliced_list = json.loads(sliced_list)
-    
-    g_current_index = {}
-    g_current_index["index"] = 0
-    g_list_copy = {}
-    g_list_copy = {key:val for key,val in sorted(sliced_list.items(),key=lambda item: int(item[0]))}
-    input_list_index_mmap.seek(0)
-    input_list_index_mmap.write(bytes(json.dumps(g_current_index), encoding="utf-8")) #The two spaces are important, they overwrite larger numbers
-    #print(g_list_copy)
+    input_list_data = input_list_mmap.read(4096)
+    input_list_data = input_list_data[:100]
+    bytes_input_list_data = bytearray(input_list_data)
+    print("from Lua")
+    print(bytes_input_list_data)
+    byte_a = bytes('a',"utf-8")
+    bytes_input_list_data[50] = byte_a[0]
+    bytes_input_list_data[49] = 100
+    bytes_input_list_data[48] = 50
+    bytes_input_list_data[99] = 99
+    bytes_input_list_data[0] = 97
+    print("bytes before write to lua")
+    print(bytes_input_list_data)
 
-    input_list_index_mmap.seek(0)
-    input_list_index = input_list_index_mmap.read(4096)
-    sliced_list_index = str(input_list_index).split('\\x00') #Cut extra characters
-    sliced_list_index = sliced_list_index[0]
-    sliced_list_index = str(sliced_list_index).split('}')
-    sliced_list_index = sliced_list_index[0]
 
-    sliced_list_index = sliced_list_index[2:]
-    sliced_list_index += '}'
-    print(sliced_list_index)
-    sliced_list_index = json.loads(sliced_list_index)
 
-    print(sliced_list_index["index"])
+    input_list_mmap.seek(0)
+    input_list_mmap.write(bytes_input_list_data)
+
+    g_current_index_python = input_list_mmap.read(5)
+    print(g_current_index_python)
+
+    input_list_mmap.seek(100)
+    input_list_mmap.write(bytes([100]))
+    g_current_index = bytes([0])[0]
+    for i in range(100):
+        press_button("B")
+    print(bytes([0])[0])
+    input_list_mmap.seek(0)
+    input_list_data = input_list_mmap.read(100)
+    print(input_list_data)
+    os._exit(1)
     #print(int(sliced_list_index))
     #print(g_list_copy)
     #while current_index != 100:
