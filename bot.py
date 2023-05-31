@@ -90,7 +90,7 @@ def emu_combo(sequence: list): # Function to send a sequence of inputs and delay
     except: debug_log.exception('')
 
 def press_button(button: str): # Function to update the press_input object
-        global bytes_input_list_data, g_current_index
+        global g_current_index
         match button:
             case 'Left':
                 button = 'l'
@@ -100,43 +100,16 @@ def press_button(button: str): # Function to update the press_input object
                 button = 'u'
             case 'Down':
                 button = 'd'
-            
-        byte_a = bytes('a',"utf-8")
-        #bytes_input_list_data[50] = byte_a[0]
-        #bytes_input_list_data[49] = 100
-        #bytes_input_list_data[48] = 50
-        #bytes_input_list_data[99] = 99
-        print("bytes arr in pressbuton:")
-
-        print(bytes_input_list_data)
-
-        debug_log.debug(f"Pressing: {button}...")
-        print(f"{button}, {g_current_index}")
+            case 'Select':
+                button = 's'
         index = g_current_index
-        print(f"index:{index}")
-        print(bytes(button,"utf-8"))
-        bytes_input_list_data[80] = bytes(button,"utf-8")[0]
         input_list_mmap.seek(index)
         input_list_mmap.write(bytes(button,"utf-8"))
-        input_list_mmap.seek(101)
-        input_list_mmap.write(bytes([index]))
-        input_list_mmap.seek(0)
-        first101Bytes = input_list_mmap.read(102)
-        print("first101")
-        print(first101Bytes)
+        input_list_mmap.seek(100) #Position 0-99 are inputs, position 100 keeps the value of the current index
+        input_list_mmap.write(bytes([index+1]))
         g_current_index +=1
         if g_current_index > 99:
             g_current_index = 0
-
-
-def old_press_button(button: str): # Function to update the press_input object
-    global current_input
-    debug_log.debug(f"Pressing: {button}...")
-    input_list[current_input] = button
-    input_list.seek(0)
-    input_list_mmap.write(bytes(json.dumps(input_list), encoding="utf-8"))
-    press_input[button] = False
-
 
 def hold_button(button: str): # Function to update the hold_input object
     global hold_input
@@ -148,30 +121,34 @@ def release_button(button: str): # Function to update the hold_input object
     global hold_input
     debug_log.debug(f"Releasing: {button}...")
     hold_input[button] = False
-
+    hold_input_mmap.seek(0)
+    hold_input_mmap.write(bytes(json.dumps(hold_input), encoding="utf-8"))
 def release_all_inputs(): # Function to release all keys in all input objects
     global press_input, hold_input
     debug_log.debug(f"Releasing all inputs...")
     for button in ["A", "B", "L", "R", "Up", "Down", "Left", "Right", "Select", "Start", "Power"]:
-        press_input[button] = False
+        #press_input[button] = False
         hold_input[button] = False
-
+        hold_input_mmap.seek(0)
+        hold_input_mmap.write(bytes(json.dumps(hold_input), encoding="utf-8"))
 def opponent_changed(): # This function checks if there is a different opponent since last check, indicating the game state is probably now in a battle
     try:
         global last_opponent_personality
+        #debug_log.info(f"Checking if opponent has changed... Previous PID: {last_opponent_personality}, New PID: {opponent_info['personality']}")
 
-        if opponent_info:
-            if last_opponent_personality != opponent_info["personality"]:
-                last_opponent_personality = opponent_info["personality"]
-                debug_log.info("Opponent has changed!")
-                return True
-            else: return False
-        else: return False
-    except:
-        if args.di:
-            debug_log.exception('')
+        # Fixes a bug where the bot checks the opponent for up to 20 seconds if it was last closed in a battle
+        if trainer_info["state"] == 80:
+            return False
+
+        if opponent_info and last_opponent_personality != opponent_info["personality"]:
+            last_opponent_personality = opponent_info["personality"]
+            debug_log.info("Opponent has changed!")
+            return True
+        
         return False
-    
+    except Exception as e:
+        if args.d: debug_log.exception(str(e))
+        return False
 def get_screenshot():
     g_bizhawk_screenshot = None
     hold_button("Screenshot")
@@ -403,9 +380,7 @@ def flee_battle(): # Function to run from wild pokemon
         debug_log.info("Running from battle...")
         while trainer_info["state"] != 80: # State 80 = overworld
             while not find_image("data/templates/battle/run.png") and trainer_info["state"] != 80:
-                press_button("Right")
-                press_button("Down")
-                press_button("B") 
+                emu_combo(["Right","50ms","Down","B"])
                 # Press right + down until RUN is selected
             while find_image("data/templates/battle/run.png") and trainer_info["state"] != 80: press_button("A")
             press_button("B")
@@ -418,30 +393,32 @@ def run_until_obstructed(direction: str, run: bool = True): # Function to run un
     try:
         debug_log.info(f"Pathing {direction.lower()} until obstructed...")
         if run: hold_button("B")
+        hold_button(direction)
 
         last_x = trainer_info["posX"]
         last_y = trainer_info["posY"]
 
+        if run: move_speed = 8
+        else: move_speed = 16
+
         dir_unchanged = 0
-        while dir_unchanged < 35:
-            time.sleep(0.01/emu_speed)
-            hold_button(direction)
-            if direction == "Left" or direction == "Right":
-                if last_x == trainer_info["posX"]: dir_unchanged += 1
-                else:
-                    last_x = trainer_info["posX"]
-                    dir_unchanged = 0
-            if direction == "Up" or direction == "Down":
-                if last_y == trainer_info["posY"]: dir_unchanged += 1
-                else:
-                    last_y = trainer_info["posY"]
-                    dir_unchanged = 0
+        while dir_unchanged < move_speed:
+            if last_x == trainer_info["posX"] and last_y == trainer_info["posY"]: 
+                dir_unchanged += 1
+                continue
+            
+            last_x = trainer_info["posX"]
+            last_y = trainer_info["posY"]
+            dir_unchanged = 0
         
         release_button(direction)
-        debug_log.info("Bonk!")
-        if run: release_button("B")
-    except:
-        debug_log.exception('')
+        release_button("B")
+        time.sleep(0.5)
+        press_button("B") # press and release B in case of a random pokenav call
+
+        return [last_x, last_y]
+    except Exception as e:
+        if args.d: debug_log.exception(str(e))
 
 def follow_path(coords: list):
     def run_to_pos(x: int, y: int, map_data: tuple, run: bool = True):
@@ -696,9 +673,9 @@ def identify_pokemon(starter: bool = False): # Identify opponent pokemon and inc
         else:
             i = 0
             while trainer_info["state"] not in [3, 255] and i < 250:
-                press_button("B")
+                #press_button("B")
                 i += 1
-        #if trainer_info["state"] == 80: return False
+        if trainer_info["state"] == 80: return False
 
         if starter: pokemon = party_info[0]
         else: pokemon = opponent_info
@@ -773,7 +750,6 @@ def identify_pokemon(starter: bool = False): # Identify opponent pokemon and inc
 
                 elif "wild_pokemon" in config["battle"]: battle()
                 else:
-                    print("fleeing")
                     flee_battle()
     
             return False
@@ -1005,28 +981,23 @@ def mainLoop(): # 🔁 Main loop
                         elif config["bot_mode"] == "Run/Surf until obstructed":
                             run_until_obstructed(config["obstructed_dir"][0])
                             run_until_obstructed(config["obstructed_dir"][1])
+
                     identify_pokemon()
 
                 # 🐠 Fishing method
                 if config["bot_mode"] == "Fishing":
                     debug_log.info(f"Fishing...")
-                    #emu_combo(["Select", "800ms"]) # Cast rod and wait for fishing animation
+                    emu_combo(["Select", "800ms"]) # Cast rod and wait for fishing animation
                     started_fishing = time.time()
-                    on_the_hook = False
                     while not opponent_changed(): # State 80 = overworld
-                        print("fishing")
-                        while on_the_hook == False:
-                            time.sleep(0.010)
-                            if find_image("data/templates/oh_a_bite.png") or find_image("data/templates/on_the_hook.png"):
-                                press_button("A")
-                                if find_image("data/templates/on_the_hook.png"):
-                                    on_the_hook = True
-                                while find_image("data/templates/oh_a_bite.png"):
-                                    pass
-                            elif find_image("data/templates/not_even_a_nibble.png") or find_image("data/templates/it_got_away.png"):
-                                #press_button("B")
-                                pass
-                            #elif not find_image("data/templates/text_period.png"): emu_combo(["Select", "800ms"]) # Re-cast rod if the fishing text prompt is not visible
+                        if find_image("data/templates/oh_a_bite.png") or find_image("data/templates/on_the_hook.png"):
+                            press_button("A")
+                            while find_image("data/templates/oh_a_bite.png"):
+                                pass #This keeps you from getting multiple A presses and failing the catch
+                        elif find_image("data/templates/not_even_a_nibble.png") or find_image("data/templates/it_got_away.png"):
+                            press_button("B")
+                            pass
+                        elif not find_image("data/templates/text_period.png"): emu_combo(["Select", "800ms"]) # Re-cast rod if the fishing text prompt is not visible
                     identify_pokemon()
 
                 # ➕ Starters soft reset method
@@ -1197,55 +1168,8 @@ try:
 
     default_input = {"A": False, "B": False, "L": False, "R": False, "Up": False, "Down": False, "Left": False, "Right": False, "Select": False, "Start": False, "Light Sensor": 0, "Power": False, "Tilt X": 0, "Tilt Y": 0, "Tilt Z": 0, "Screenshot": False}
     input_list_mmap = mmap.mmap(-1, 4096, tagname="bizhawk_input_list", access=mmap.ACCESS_WRITE)
-    arr_input_list = array.array('B',[0]*100) # Create empty byte arr
-    input_list_mmap.seek(0)
-    input_list_data = input_list_mmap.read(4096)
-    input_list_data = input_list_data[:100]
-    bytes_input_list_data = bytearray(input_list_data)
-    print("from Lua")
-    print(bytes_input_list_data)
-    byte_a = bytes('a',"utf-8")
-    bytes_input_list_data[50] = byte_a[0]
-    bytes_input_list_data[49] = 100
-    bytes_input_list_data[48] = 50
-    bytes_input_list_data[99] = 99
-    bytes_input_list_data[0] = 97
-    print("bytes before write to lua")
-    print(bytes_input_list_data)
-
-
-
-    input_list_mmap.seek(0)
-    input_list_mmap.write(bytes_input_list_data)
-
-    g_current_index_python = input_list_mmap.read(5)
-    print(g_current_index_python)
-
-    input_list_mmap.seek(100)
-    input_list_mmap.write(bytes([100]))
-    g_current_index = bytes([0])[0]
-    for i in range(100):
-        press_button("B")
-    print(bytes([0])[0])
-    input_list_mmap.seek(0)
-    input_list_data = input_list_mmap.read(100)
-    print(input_list_data)
-    os._exit(1)
-    #print(int(sliced_list_index))
-    #print(g_list_copy)
-    #while current_index != 100:
-      #  for index in sliced_list:
-            #debug_log.debug(f"Pressing: {button}...")
-       #     g_list_copy[f"{current_index}"] = "A"
-       #     input_list_mmap.seek(0)
-      #  current_index += 1
-        #print(len(json.dumps(list_copy)))
-       # input_list_mmap.write(bytes(json.dumps(g_list_copy, sort_keys=True), encoding="utf-8"))
-    #for i in range(100):
-       # press_button("B")
-        
-    #press_input_mmap = mmap.mmap(-1, 4096, tagname="bizhawk_press_input", access=mmap.ACCESS_WRITE)
-    #press_input = default_input
+    g_current_index = 1 #Variable that keeps track of what input in the list we are on.
+    
     hold_input_mmap = mmap.mmap(-1, 4096, tagname="bizhawk_hold_input", access=mmap.ACCESS_WRITE)
     hold_input = default_input
 
